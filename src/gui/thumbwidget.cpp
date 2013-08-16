@@ -11,13 +11,13 @@ ThumbWidget::ThumbWidget(const SVGInfo &info, bool compare, QWidget *parent) :
 #ifdef Q_OS_WIN
     frame->setFrameShadow(QFrame::Plain);
 #endif
+
     lbl1->setText("<b>" + tr("Name:") + "</b>");
     refill(info, compare);
 }
 
 void ThumbWidget::refill(const SVGInfo &info, bool compare)
 {
-    iconsWidget->setMinimumHeight(height()-20);
     iconsWidget->setPaths(info.inPath, info.outPath,compare);
 
     lblName->setMinimumWidth(300);
