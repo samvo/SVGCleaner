@@ -11,12 +11,17 @@
 #include "someutils.h"
 #include "wizarddialog.h"
 
+// TODO: rewrite presets
+// TODO: save last options automaticly
+// TODO: hide multithreading option if detected only one core
+
 WizardDialog::WizardDialog(QWidget *parent) :
     QDialog(parent)
 {
     setupUi(this);
     loadSettings();
     setupGUI();
+    setupToolTips();
     adjustSize();
 }
 
@@ -60,6 +65,14 @@ void WizardDialog::loadSettings()
 
 void WizardDialog::setupGUI()
 {
+    // NOTE: not implemented
+    chBoxRmNonSvgAttr->hide();
+    chBoxRmClipAttr->hide();
+    chBoxConvCToL->hide();
+    chBoxConvCToS->hide();
+    chBoxConvQToT->hide();
+    chBoxRecalcCoord->hide();
+
     // setup type radioButtons
     connect(radioBtn1, SIGNAL(clicked()), this, SLOT(radioSelected()));
     connect(radioBtn2, SIGNAL(clicked()), this, SLOT(radioSelected()));
@@ -73,9 +86,7 @@ void WizardDialog::setupGUI()
     connect(chBoxRecursive, SIGNAL(clicked()),            this, SLOT(loadFiles()));
 
     // alignment fixes
-    gridLayoutOutput->setAlignment(spinBoxIndent,   Qt::AlignRight);
-    gridLayoutOutput->setAlignment(cmbBoxEmptyTags, Qt::AlignRight);
-    gridLayoutOutput->setAlignment(cmbBoxQuote,     Qt::AlignRight);
+    gridLayoutOutput->setAlignment(spinBoxIndent, Qt::AlignRight);
 
     // Placeholder text work only on qt>4.7
 #if QT_VERSION >= 0x040700
@@ -99,14 +110,18 @@ void WizardDialog::setupGUI()
     pageListNotTr << "main" << "presets" << "elements" << "attributes" << "paths"
                   << "optimization" << "output";
     // create icons for pages in "tabbar", which is QListWidget
+    int baseIconSize = 64;
+#ifdef Q_OS_MAC
+    baseIconSize = 70;
+#endif
     for (int i = 0; i < pageList.count(); ++i) {
         QListWidgetItem *item = new QListWidgetItem(listWidget);
         ItemWidget *w = new ItemWidget(pageListNotTr.at(i));
         item->setToolTip(pageList.at(i));
-        item->setSizeHint(QSize(64, 64));
+        item->setSizeHint(QSize(baseIconSize, baseIconSize));
         listWidget->setItemWidget(item, w);
     }
-    listWidget->setFixedWidth(64*listWidget->count()+5);
+    listWidget->setFixedWidth(baseIconSize*listWidget->count()+5);
     connect(listWidget, SIGNAL(currentItemChanged(QListWidgetItem*, QListWidgetItem*)),
                             this, SLOT(changePage(QListWidgetItem*, QListWidgetItem*)));
     listWidget->setCurrentRow(0);
@@ -131,19 +146,28 @@ void WizardDialog::setupGUI()
     loadFiles();
 }
 
+void WizardDialog::setupToolTips()
+{
+    chBoxGroupByStyle->setToolTip(tr("For example") + ":\n\n(" + tr("before") + ")\n"
+        "<path style=\"fill:#fff\" d=\"...\"/>\n<path style=\"fill:#fff\" d=\"...\"/>\n"
+        "<path style=\"fill:#fff\" d=\"...\"/>\n\n(" + tr("after") + ")\n"
+        "<g style=\"fill:#fff\">\n  <path d=\"...\"/>\n  <path d=\"...\"/>"
+        "\n  <path d=\"...\"/>\n</g>");
+}
+
 void WizardDialog::radioSelected()
 {
     frameOutDir->setVisible(radioBtn1->isChecked());
     frameRename->setVisible(radioBtn2->isChecked());
     lblOverwrite->setVisible(radioBtn3->isChecked());
     QRadioButton *rBtn = static_cast<QRadioButton *>(sender());
-    settings->setValue("Wizard/Type",rBtn->accessibleName());
+    settings->setValue("Wizard/Type", rBtn->accessibleName());
 }
 
 void WizardDialog::createExample()
 {
-    lblExample->setText(tr("For example: ")+lineEditPrefix->text()
-                       +tr("filename" )+lineEditSuffix->text()+".svg");
+    lblExample->setText(tr("For example") + ": " + lineEditPrefix->text()
+                        + tr("filename" ) + lineEditSuffix->text() + ".svg");
 }
 
 void WizardDialog::loadPresets()
@@ -190,7 +214,7 @@ void WizardDialog::changePage(QListWidgetItem *current, QListWidgetItem *previou
 
 void WizardDialog::on_buttonBox_clicked(QAbstractButton *button)
 {
-    if        (buttonBox->standardButton(button) == QDialogButtonBox::Ok) {
+    if (buttonBox->standardButton(button) == QDialogButtonBox::Ok) {
         if (checkForWarnings()) {
             saveSettings();
             done(QDialog::Accepted);
@@ -205,40 +229,36 @@ void WizardDialog::on_buttonBox_clicked(QAbstractButton *button)
 ToThread WizardDialog::threadArguments()
 {
     ToThread threadArgs;
-    threadArgs.args        = argsLine();
-    threadArgs.inputFiles  = getInFiles();
-    threadArgs.outputFiles = genOutFiles();
-    threadArgs.level       = compressValue();
-    threadArgs.cleanerPath = SomeUtils::findFile("svgcleaner.pl", "/usr/bin/");
-#ifdef Q_OS_WIN
-    threadArgs.zipPath     = SomeUtils::findFile("7za.exe", "");
-    threadArgs.perlPath    = SomeUtils::findFile("perl.exe", "C:/strawberry/perl/bin/");
-#else
-    threadArgs.zipPath     = SomeUtils::findFile("7z", "/usr/bin/");
-    threadArgs.perlPath    = SomeUtils::findFile("perl", "/usr/bin/");
-#endif
+    threadArgs.args          = argsLine();
+    threadArgs.inputFiles    = getInFiles();
+    threadArgs.outputFiles   = genOutFiles();
+    threadArgs.compressLevel = compressValue();
+    threadArgs.cliPath       = SomeUtils::findBinFile("svgcleaner-cli");
+    threadArgs.zipPath       = SomeUtils::findBinFile("7za");
     return threadArgs;
 }
 
 QStringList WizardDialog::argsLine()
 {
     QStringList tmpList;
+    // 2 - page number
     for (int i = 2; i < stackedWidget->count(); ++i) {
         foreach(QWidget *w, stackedWidget->widget(i)->findChildren<QWidget *>()) {
             QString name = w->accessibleName();
             if (!name.isEmpty()) {
+                // TODO: maybe add '--' to definition in gui
                 if (w->inherits("QCheckBox") && !qobject_cast<QCheckBox *>(w)->isChecked())
-                    tmpList.append("--"+name+"=no");
+                    tmpList.append("--" + name);
                 else if (w->inherits("QRadioButton") && !isDefault(w))
-                    tmpList.append("--"+name);
+                    tmpList.append("--" + name);
                 else if (w->inherits("QComboBox") && !isDefault(w))
-                    tmpList.append("--"+name+"="+qobject_cast<QComboBox *>(w)->currentText());
+                    tmpList.append("--" + name + "="+qobject_cast<QComboBox *>(w)->currentText());
                 else if (w->inherits("QSpinBox") && !isDefault(w))
-                    tmpList.append("--"+name+"="
-                                   +QString::number(qobject_cast<QSpinBox *>(w)->value()));
+                    tmpList.append("--" + name + "="
+                                   + QString::number(qobject_cast<QSpinBox *>(w)->value()));
                 else if (w->inherits("QDoubleSpinBox") && !isDefault(w))
-                    tmpList.append("--"+name+"="
-                                   +QString::number(qobject_cast<QDoubleSpinBox *>(w)->value()));
+                    tmpList.append("--" + name + "="
+                                   + QString::number(qobject_cast<QDoubleSpinBox *>(w)->value()));
             }
         }
     }
@@ -280,7 +300,7 @@ QStringList WizardDialog::getInFiles()
 QStringList WizardDialog::genOutFiles()
 {
     QStringList list;
-    if        (radioBtn1->isChecked()) {
+    if (radioBtn1->isChecked()) {
         foreach (QFileInfo file, fileList) {
             list.append(QDir(lineEditOutDir->text()).absolutePath()
                         +QString(file.absoluteFilePath())
@@ -336,7 +356,7 @@ void WizardDialog::on_btnOpenInDir_clicked()
     if (currPath.isEmpty())
         currPath = QDir::homePath();
 
-    QString path = QFileDialog::getExistingDirectory(this,tr("Select an input folder"),
+    QString path = QFileDialog::getExistingDirectory(this, tr("Select an input folder"),
                                                      currPath,
                                                      QFileDialog::ShowDirsOnly);
     if (!path.isEmpty())
@@ -374,12 +394,16 @@ bool WizardDialog::checkForWarnings()
     } else if (fileList.isEmpty()) {
         createWarning(tr("An input folder did not contain any svg, svgz files."));
         check = false;
-    } else if (!checkFor("7za")) {
-        createWarning(tr("You have to install 7-Zip to use SVG Cleaner."));
+    } else if (SomeUtils::findBinFile("svgcleaner-cli").isEmpty()) {
+        QMessageBox::critical(this, tr("Error"),
+                        tr("The 'svgcleaner-cli' executable is not found in these folders:\n")
+                        + SomeUtils::genSearchFolderList());
         check = false;
-    } else if (!checkFor("perl")) {
-        createWarning(tr("You have to install Perl to use SVG Cleaner."));
-        check = false;
+    } else if (SomeUtils::findBinFile("7za").isEmpty()) {
+        QMessageBox::warning(this, tr("Warning"),
+                        tr("The '7za' executable is not found in these folders:\n")
+                        + SomeUtils::genSearchFolderList() + "\n\n"
+                        + tr("You can not handle the SVGZ files."));
     } else if (QFileInfo(lineEditOutDir->text()).isDir()
                && !QFileInfo(lineEditOutDir->text()).isWritable()) {
         createWarning(tr("Selected output folder is not writable."));
@@ -390,26 +414,7 @@ bool WizardDialog::checkForWarnings()
 
 void WizardDialog::createWarning(const QString &text)
 {
-    QMessageBox::warning(this, tr("Warning"), text,QMessageBox::Ok);
-}
-
-/*
-    On Windows:
-    1) You have to download 7-Zip CLI. Then put 7za.exe right to SVGCleaner.exe.
-
-    2) You have to install Strawberry Perl in to default install folder.
-    Then install XML-Twig plugin.
-
-    On Linux:
-    Install: p7zip, perl, xml-twig.
-*/
-bool WizardDialog::checkFor(const QString &name)
-{
-#ifdef Q_OS_WIN //! delete it
-    return QFile(SomeUtils::findFile(name+".exe", "C:/strawberry/perl/bin/")).exists();
-#else
-    return QFile(SomeUtils::findFile(name, "/usr/bin/")).exists();
-#endif
+    QMessageBox::warning(this, tr("Warning"), text, QMessageBox::Ok);
 }
 
 void WizardDialog::on_linePresetName_textChanged(const QString &text)
@@ -542,7 +547,7 @@ void WizardDialog::setPreset(const QString &preset)
                     qobject_cast<QSpinBox *>(w)->setValue(
                                              w->accessibleDescription().toInt());
                     line += findLabel(name)+" "
-                            +QString::number(w->accessibleDescription().toInt());
+                            + QString::number(w->accessibleDescription().toInt());
                 }
             }
             else if (w->inherits("QDoubleSpinBox"))
@@ -554,7 +559,7 @@ void WizardDialog::setPreset(const QString &preset)
                     qobject_cast<QDoubleSpinBox *>(w)->setValue(
                                                    w->accessibleDescription().toDouble());
                     line += findLabel(name)+" "
-                            +QString::number(w->accessibleDescription().toDouble());
+                            + QString::number(w->accessibleDescription().toDouble());
                 }
             }
             if (!QString(line).remove(" ").isEmpty() && w->isEnabled())
@@ -578,7 +583,7 @@ QString WizardDialog::findLabel(const QString &accessibleName)
 void WizardDialog::on_btnRemovePreset_clicked()
 {
     QString path = settingPath() + "/presets/";
-    QFile file(path+cmbBoxPreset->currentText()+".preset");
+    QFile file(path + cmbBoxPreset->currentText() + ".preset");
     file.remove();
     cmbBoxPreset->removeItem(cmbBoxPreset->currentIndex());
 }
@@ -617,9 +622,11 @@ bool WizardDialog::eventFilter(QObject *obj, QEvent *event)
 
 void WizardDialog::deleteThreads()
 {
-    fileSearch->stopSearch(); // NOTE: stops fileSearch loop
+    // stops fileSearch loop
+    fileSearch->stopSearch();
     searchThread->quit();
-    searchThread->wait(); // NOTE: program crash without it
+    // NOTE: program crash without it
+    searchThread->wait();
     searchThread->deleteLater();
 }
 
